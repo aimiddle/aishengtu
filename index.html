@@ -528,7 +528,7 @@
 
             <div class="config-row">
                 <div style="flex: 2;">
-                    <label for="apiKey">API密钥 </label>
+                    <label for="apiKey">API密钥 <a href="https://api.aimiddle.vip" target="_blank" style="color: #0ea5e9; text-decoration: none; font-size: 13px;">（获取秘钥）</a></label>
                     <input type="text" id="apiKey" placeholder="请输入万象聚合API密钥" />
                 </div>
                 <div style="flex: 2;">
@@ -1175,7 +1175,7 @@
                 stopGenerationTimer();
 
                 displayResults(allImages);
-                addToHistory(prompt, allImages.length);
+                addToHistory(prompt, allImages);
                 
                 const elapsed = Math.floor((Date.now() - generationStartTime) / 1000);
                 const minutes = Math.floor(elapsed / 60);
@@ -1248,19 +1248,20 @@
             lightbox.classList.remove('show');
         }
 
-        function addToHistory(prompt, imageCount) {
+        function addToHistory(prompt, images) {
             const history = JSON.parse(localStorage.getItem('generation_history') || '[]');
             history.unshift({
                 prompt: prompt,
                 model: selectedModel,
-                imageCount: imageCount,
+                imageCount: images.length,
+                images: images,
                 timestamp: Date.now()
             });
-            
-            if (history.length > 50) {
+
+            if (history.length > 10) {
                 history.pop();
             }
-            
+
             try {
                 localStorage.setItem('generation_history', JSON.stringify(history));
                 updateHistoryList();
@@ -1272,9 +1273,16 @@
         }
 
         function updateHistoryList() {
-            const history = JSON.parse(localStorage.getItem('generation_history') || '[]');
+            let history = [];
+            try {
+                history = JSON.parse(localStorage.getItem('generation_history') || '[]');
+            } catch (e) {
+                localStorage.removeItem('generation_history');
+                history = [];
+            }
+
             const historyList = document.getElementById('historyList');
-            
+
             if (history.length === 0) {
                 historyList.innerHTML = '<p style="text-align: center; color: var(--muted); padding: 40px;">暂无历史记录</p>';
                 document.getElementById('historyCount').textContent = '0 条';
@@ -1285,19 +1293,38 @@
             history.forEach((item, index) => {
                 const div = document.createElement('div');
                 div.className = 'history-item';
+                div.dataset.index = index;
+
+                let imagesHtml = '';
+                if (item.images && item.images.length > 0) {
+                    imagesHtml = '<div style="display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap;">';
+                    item.images.forEach((img, imgIndex) => {
+                        imagesHtml += `<img src="${img}" alt="历史图片${imgIndex + 1}" style="width: 64px; height: 64px; object-fit: cover; border-radius: 8px; cursor: zoom-in; border: 1px solid var(--border);" data-history-index="${index}" data-img-index="${imgIndex}" />`;
+                    });
+                    imagesHtml += '</div>';
+                }
+
                 // 显示完整提示词，不使用 substring 截断
                 div.innerHTML = `
                     <div style="font-weight: bold; margin-bottom: 5px; color: var(--text); word-break: break-word;">${item.prompt}</div>
                     <div style="font-size: 12px; color: var(--muted);">
-                        模型：${item.model} | 
-                        图片数：${item.imageCount || 0} | 
+                        模型：${item.model} |
+                        图片数：${item.imageCount || 0} |
                         时间：${new Date(item.timestamp).toLocaleString()}
                     </div>
+                    ${imagesHtml}
                 `;
                 historyList.appendChild(div);
             });
 
             document.getElementById('historyCount').textContent = `${history.length} 条`;
+
+            // 给历史图片绑定点击事件（事件委托）
+            historyList.querySelectorAll('img[data-history-index]').forEach(img => {
+                img.addEventListener('click', function() {
+                    openLightbox(this.src);
+                });
+            });
         }
 
         function clearHistory() {
