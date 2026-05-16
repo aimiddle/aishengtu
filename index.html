@@ -634,7 +634,7 @@
         </div>
 
         <div class="warning">
-            ⚠️ 警告：服务器每12小时清理图片，请及时下载生成的图片！
+            ⚠️ 请及时下载生成的图片！服务器不保存图片。
         </div>
     </div>
 
@@ -934,7 +934,6 @@
                     let requestUrl = '';
                     let requestBody = null;
                     let useFormData = false;
-                    let isGeminiNative = false;
                     
                     if (selectedModel === 'gpt-image-2' || selectedModel === 'gpt-image-2-all') {
                         // GPT模型使用OpenAI格式
@@ -990,67 +989,53 @@
                             requestBody.format = format;
                         }
                     } else {
-                        // Gemini模型使用原生Gemini API格式
-                        isGeminiNative = true;
-                        // 构建正确的v1beta端点（移除baseUrl末尾的/v1，避免路径重复）
-                        const baseUrlClean = baseUrl.replace(/\/v1$/, '');
-                        requestUrl = `${baseUrlClean}/v1beta/models/${selectedModel}:generateContent`;
+                        // Gemini模型使用OpenAI兼容格式（通过中间件）
+                        requestUrl = `${baseUrl}/chat/completions`;
                         
-                        const aspectRatio = document.getElementById('aspectRatio').value;
-                        const quality = document.getElementById('quality').value;
-                        const imageSize = mapQualityToImageSize(quality);
-                        
-                        // 构建contents数组
-                        const parts = [];
+                        // 构建消息内容
+                        const content = [];
                         
                         // 添加提示词
-                        parts.push({
+                        content.push({
+                            type: 'text',
                             text: prompt
                         });
                         
                         // 添加参考图
                         if (uploadedImages.length > 0) {
                             uploadedImages.forEach(imgData => {
-                                // 从base64数据中提取纯base64部分
-                                const base64Data = imgData.includes('base64,') 
-                                    ? imgData.split('base64,')[1] 
-                                    : imgData;
-                                
-                                // 判断mime_type
-                                const mimeType = imgData.includes('image/png') ? 'image/png' : 'image/jpeg';
-                                
-                                parts.push({
-                                    inline_data: {
-                                        mime_type: mimeType,
-                                        data: base64Data
+                                content.push({
+                                    type: 'image_url',
+                                    image_url: {
+                                        url: imgData
                                     }
                                 });
                             });
                         }
                         
-                        // 构建请求体
                         requestBody = {
-                            contents: [
+                            model: selectedModel,
+                            messages: [
                                 {
                                     role: 'user',
-                                    parts: parts
+                                    content: content
                                 }
                             ],
-                            generationConfig: {
-                                responseModalities: ['IMAGE']
-                            }
+                            max_tokens: 4096
                         };
                         
-                        // 添加imageConfig（如果不是自动）
+                        // 添加质量参数（通过额外字段）
+                        const aspectRatio = document.getElementById('aspectRatio').value;
+                        const quality = document.getElementById('quality').value;
+                        const imageSize = mapQualityToImageSize(quality);
+                        
                         if (aspectRatio !== 'auto' || imageSize !== '1K') {
-                            requestBody.generationConfig.imageConfig = {};
-                            
+                            requestBody.generation_config = {};
                             if (aspectRatio !== 'auto') {
-                                requestBody.generationConfig.imageConfig.aspectRatio = aspectRatio;
+                                requestBody.generation_config.aspect_ratio = aspectRatio;
                             }
-                            
                             if (imageSize !== '1K') {
-                                requestBody.generationConfig.imageConfig.imageSize = imageSize;
+                                requestBody.generation_config.image_size = imageSize;
                             }
                         }
                     }
@@ -1067,21 +1052,8 @@
                             headers: headers,
                             body: requestBody
                         });
-                    } else if (isGeminiNative) {
-                        // Gemini原生API格式
-                        const headers = {
-                            'Content-Type': 'application/json',
-                            'Authorization': `Bearer ${apiKey}`,
-                            'Accept': 'application/json'
-                        };
-
-                        response = await fetch(requestUrl, {
-                            method: 'POST',
-                            headers: headers,
-                            body: JSON.stringify(requestBody)
-                        });
                     } else {
-                        // OpenAI格式（GPT模型）
+                        // OpenAI兼容格式（GPT模型 和 Gemini模型 均使用此格式）
                         const headers = {
                             'Content-Type': 'application/json',
                             'Authorization': `Bearer ${apiKey}`,
@@ -1104,22 +1076,10 @@
                     
                     let images = [];
 
-                    if (isGeminiNative) {
-                        // 解析Gemini原生API响应
-                        if (data.candidates && data.candidates.length > 0) {
-                            const candidate = data.candidates[0];
-                            if (candidate.content && candidate.content.parts) {
-                                candidate.content.parts.forEach(part => {
-                                    if (part.inlineData && part.inlineData.data) {
-                                        const mimeType = part.inlineData.mimeType || 'image/png';
-                                        images.push(`data:${mimeType};base64,${part.inlineData.data}`);
-                                    }
-                                });
-                            }
-                        }
-                    } else if (selectedModel === 'gpt-image-2' || selectedModel === 'gpt-image-2-all') {
-                        // 解析GPT模型响应
+                    if (selectedModel === 'gpt-image-2' || selectedModel === 'gpt-image-2-all' || selectedModel === 'gemini-3-pro-image-preview' || selectedModel === 'gemini-3.1-flash-image-preview') {
+                        // 解析OpenAI兼容格式响应（GPT模型和Gemini模型均使用此格式）
                         if (data.data && data.data.length > 0) {
+                            // 格式1: { data: [{ b64_json: "...", ... }] }
                             data.data.forEach(item => {
                                 if (item.b64_json) {
                                     images.push(`data:image/png;base64,${item.b64_json}`);
@@ -1127,37 +1087,40 @@
                                     images.push(item.url);
                                 }
                             });
-                        }
-                    } else {
-                        // 解析OpenAI格式响应（旧版Gemini通过OpenAI代理）
-                        const message = data.choices[0].message;
-                        
-                        if (message.content) {
-                            const markdownRegex = /!\[([^\]]*)\]\(([^)]+)\)/g;
-                            let match;
-                            while ((match = markdownRegex.exec(message.content)) !== null) {
-                                images.push(match[2]);
-                            }
-
-                            if (images.length === 0 && message.content.includes('base64')) {
-                                const base64Regex = /data:image\/[^;]+;base64,([^)]+)/g;
-                                while ((match = base64Regex.exec(message.content)) !== null) {
-                                    images.push(match[0]);
+                        } else if (data.choices && data.choices.length > 0) {
+                            // 格式2: { choices: [{ message: { content: "..." } }] }
+                            const message = data.choices[0].message;
+                            
+                            if (message.content) {
+                                // 从Markdown中提取图片
+                                const markdownRegex = /!\[([^\]]*)\]\(([^)]+)\)/g;
+                                let match;
+                                while ((match = markdownRegex.exec(message.content)) !== null) {
+                                    images.push(match[2]);
+                                }
+                                
+                                // 直接提取base64图片
+                                if (images.length === 0 && message.content.includes('base64')) {
+                                    const base64Regex = /data:image\/[^;]+;base64,([^)]+)/g;
+                                    while ((match = base64Regex.exec(message.content)) !== null) {
+                                        images.push(match[0]);
+                                    }
                                 }
                             }
-                        }
-
-                        if (images.length === 0 && message.tool_calls) {
-                            message.tool_calls.forEach(toolCall => {
-                                if (toolCall.function?.arguments) {
-                                    try {
-                                        const args = JSON.parse(toolCall.function.arguments);
-                                        if (args.image) {
-                                            images.push(args.image);
-                                        }
-                                    } catch (e) {}
-                                }
-                            });
+                            
+                            // 从tool_calls中提取图片
+                            if (images.length === 0 && message.tool_calls) {
+                                message.tool_calls.forEach(toolCall => {
+                                    if (toolCall.function?.arguments) {
+                                        try {
+                                            const args = JSON.parse(toolCall.function.arguments);
+                                            if (args.image) {
+                                                images.push(args.image);
+                                            }
+                                        } catch (e) {}
+                                    }
+                                });
+                            }
                         }
                     }
 
@@ -1175,7 +1138,7 @@
                 stopGenerationTimer();
 
                 displayResults(allImages);
-                addToHistory(prompt, allImages);
+                addToHistory(prompt, allImages.length);
                 
                 const elapsed = Math.floor((Date.now() - generationStartTime) / 1000);
                 const minutes = Math.floor(elapsed / 60);
@@ -1199,6 +1162,12 @@
         function displayResults(images) {
             const resultArea = document.getElementById('resultArea');
             resultArea.innerHTML = '';
+            
+            // 添加下载提醒
+            const reminder = document.createElement('div');
+            reminder.style = 'background: rgba(34,197,94,0.1); border: 1px solid var(--success); color: var(--success); padding: 12px 16px; border-radius: 10px; margin-bottom: 16px; font-size: 14px;';
+            reminder.innerHTML = '⚠️ <b>请及时下载图片！</b>服务器不保存图片，刷新页面后图片将丢失。';
+            resultArea.appendChild(reminder);
             
             const grid = document.createElement('div');
             grid.className = 'result-grid';
@@ -1248,27 +1217,37 @@
             lightbox.classList.remove('show');
         }
 
-        function addToHistory(prompt, images) {
+        function addToHistory(prompt, imageCount) {
             const history = JSON.parse(localStorage.getItem('generation_history') || '[]');
-            history.unshift({
+            
+            // 只保存元数据，不保存图片base64数据
+            const newItem = {
                 prompt: prompt,
                 model: selectedModel,
-                imageCount: images.length,
-                images: images,
+                imageCount: imageCount,
                 timestamp: Date.now()
-            });
-
-            if (history.length > 10) {
-                history.pop();
+            };
+            
+            history.unshift(newItem);
+            
+            // 只保留最近20条
+            if (history.length > 20) {
+                history = history.slice(0, 20);
             }
-
+            
             try {
                 localStorage.setItem('generation_history', JSON.stringify(history));
                 updateHistoryList();
             } catch (e) {
-                localStorage.removeItem('generation_history');
+                // 如果存储失败，只保留最近5条
+                const recentHistory = history.slice(0, 5);
+                try {
+                    localStorage.setItem('generation_history', JSON.stringify(recentHistory));
+                } catch (e2) {
+                    localStorage.removeItem('generation_history');
+                }
                 updateHistoryList();
-                showToast('历史记录已清空（存储配额超限）', 'error');
+                showToast('历史记录已截断（存储容量不足）', 'error');
             }
         }
 
@@ -1282,7 +1261,7 @@
             }
 
             const historyList = document.getElementById('historyList');
-
+            
             if (history.length === 0) {
                 historyList.innerHTML = '<p style="text-align: center; color: var(--muted); padding: 40px;">暂无历史记录</p>';
                 document.getElementById('historyCount').textContent = '0 条';
@@ -1293,38 +1272,20 @@
             history.forEach((item, index) => {
                 const div = document.createElement('div');
                 div.className = 'history-item';
-                div.dataset.index = index;
-
-                let imagesHtml = '';
-                if (item.images && item.images.length > 0) {
-                    imagesHtml = '<div style="display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap;">';
-                    item.images.forEach((img, imgIndex) => {
-                        imagesHtml += `<img src="${img}" alt="历史图片${imgIndex + 1}" style="width: 64px; height: 64px; object-fit: cover; border-radius: 8px; cursor: zoom-in; border: 1px solid var(--border);" data-history-index="${index}" data-img-index="${imgIndex}" />`;
-                    });
-                    imagesHtml += '</div>';
-                }
-
+                
                 // 显示完整提示词，不使用 substring 截断
                 div.innerHTML = `
-                    <div style="font-weight: bold; margin-bottom: 5px; color: var(--text); word-break: break-word;">${item.prompt}</div>
+                    <div style="font-weight: bold; margin-bottom: 5px; color: var(--text); word-break: break-word; white-space: pre-wrap;">${item.prompt}</div>
                     <div style="font-size: 12px; color: var(--muted);">
-                        模型：${item.model} |
-                        图片数：${item.imageCount || 0} |
+                        模型：${item.model} | 
+                        图片数：${item.imageCount || 0} | 
                         时间：${new Date(item.timestamp).toLocaleString()}
                     </div>
-                    ${imagesHtml}
                 `;
                 historyList.appendChild(div);
             });
-
+            
             document.getElementById('historyCount').textContent = `${history.length} 条`;
-
-            // 给历史图片绑定点击事件（事件委托）
-            historyList.querySelectorAll('img[data-history-index]').forEach(img => {
-                img.addEventListener('click', function() {
-                    openLightbox(this.src);
-                });
-            });
         }
 
         function clearHistory() {
